@@ -9,13 +9,15 @@ import time
 # ───────────────────────────────────────────────
 # 설정
 # ───────────────────────────────────────────────
-GITHUB_TOKEN  = str(st.secrets["GITHUB_TOKEN"]).strip().encode("ascii", "ignore").decode("ascii")
+GITHUB_TOKEN  = str(st.secrets["GITHUB_TOKEN"]).strip()
 GITHUB_REPO   = str(st.secrets["GITHUB_REPO"]).strip()
 GITHUB_PATH   = str(st.secrets.get("GITHUB_PATH", "booth_data.csv")).strip()
 BRANCH        = str(st.secrets.get("GITHUB_BRANCH", "main")).strip()
 
+# 토큰을 ASCII 바이트로 인코딩해서 헤더 latin-1 에러 방지
+_token_b64 = base64.b64encode(f":{GITHUB_TOKEN}".encode("utf-8")).decode("ascii")
 HEADERS = {
-    "Authorization": f"token {GITHUB_TOKEN}",
+    "Authorization": f"Basic {_token_b64}",
     "Accept": "application/vnd.github.v3+json",
 }
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
@@ -42,8 +44,7 @@ def load_data():
 
 def save_data(df, sha=None, message="update"):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
-    encoded = base64.b64encode(csv_bytes).decode("utf-8")
-    # ensure_ascii=True 로 한글을 \uXXXX 이스케이프 처리 → latin-1 에러 방지
+    encoded = base64.b64encode(csv_bytes).decode("ascii")
     payload = {"message": message, "content": encoded, "branch": BRANCH}
     if sha:
         payload["sha"] = sha
@@ -96,7 +97,7 @@ with tab_in:
                     "퇴장시간": "", "코인": "", "상태": "입장중",
                 }])
                 df = pd.concat([df, new_row], ignore_index=True)
-                if save_data(df, sha, f"check-in: {name}"):
+                if save_data(df, sha, f"check-in"):
                     st.success(f"🎉 {name} 님, 환영합니다!")
                     st.balloons()
                 else:
@@ -127,7 +128,7 @@ with tab_out:
                         df2.loc[mask, "퇴장시간"] = now
                         df2.loc[mask, "코인"]    = str(coins)
                         df2.loc[mask, "상태"]    = "퇴장완료"
-                        if save_data(df2, sha2, f"check-out: {row['이름']}"):
+                        if save_data(df2, sha2, "check-out"):
                             st.success(f"✅ {row['이름']} 님 퇴장 완료! 코인 {coins}개")
                             time.sleep(1)
                             st.rerun()
@@ -161,7 +162,7 @@ with tab_list:
             if pw == RESET_PW:
                 empty_df = pd.DataFrame(columns=COLUMNS)
                 _, sha = load_data()
-                if save_data(empty_df, sha, "reset data"):
+                if save_data(empty_df, sha, "reset"):
                     st.session_state["show_reset"] = False
                     st.success("✅ 데이터가 초기화되었습니다.")
                     time.sleep(1)
