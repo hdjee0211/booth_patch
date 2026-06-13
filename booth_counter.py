@@ -4,9 +4,8 @@ import base64
 import json
 from datetime import datetime
 import time
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode
-from urllib.error import HTTPError
+import http.client
+import ssl
 
 # ───────────────────────────────────────────────
 # 설정
@@ -16,41 +15,45 @@ GITHUB_REPO   = str(st.secrets["GITHUB_REPO"]).strip()
 GITHUB_PATH   = str(st.secrets.get("GITHUB_PATH", "booth_data.csv")).strip()
 BRANCH        = str(st.secrets.get("GITHUB_BRANCH", "main")).strip()
 
-API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
-COLUMNS = ["입장시간", "이름", "전화번호", "퇴장시간", "코인", "상태"]
+API_HOST = "api.github.com"
+API_PATH = f"/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
+COLUMNS  = ["입장시간", "이름", "전화번호", "퇴장시간", "코인", "상태"]
 
-def _get_headers():
-    # urllib 사용 - requests의 latin-1 헤더 문제 완전 우회
-    token_bytes = GITHUB_TOKEN.encode("utf-8")
-    auth = base64.b64encode(f":{GITHUB_TOKEN}".encode("utf-8")).decode("ascii")
-    return {
-        "Authorization": f"Basic {auth}",
-        "Accept": "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-        "User-Agent": "booth-app",
+# ───────────────────────────────────────────────
+# GitHub API - http.client 직접 사용 (latin-1 우회)
+# ───────────────────────────────────────────────
+def _request(method, path, body=None):
+    ctx = ssl.create_default_context()
+    conn = http.client.HTTPSConnection(API_HOST, context=ctx)
+    # 헤더를 bytes로 직접 전달
+    auth = base64.b64encode(f":{GITHUB_TOKEN}".encode()).decode()
+    headers = {
+        b"Authorization": f"Basic {auth}".encode(),
+        b"Accept": b"application/vnd.github.v3+json",
+        b"User-Agent": b"booth-app",
+        b"Content-Type": b"application/json",
     }
+    conn.request(method, path, body=body, headers=headers)
+    res = conn.getresponse()
+    data = res.read().decode("utf-8")
+    conn.close()
+    return res.status, data
 
-# ───────────────────────────────────────────────
-# GitHub CSV 읽기 / 쓰기
-# ───────────────────────────────────────────────
 def load_data():
-    try:
-        url = f"{API_URL}?ref={BRANCH}"
-        req = Request(url, headers=_get_headers())
-        with urlopen(req) as res:
-            content = json.loads(res.read().decode("utf-8"))
-        sha = content["sha"]
-        decoded = base64.b64decode(content["content"]).decode("utf-8")
-        df = pd.read_csv(pd.io.common.StringIO(decoded), dtype=str).fillna("")
-        for col in COLUMNS:
-            if col not in df.columns:
-                df[col] = ""
-        return df[COLUMNS], sha
-    except HTTPError as e:
-        if e.code == 404:
-            return pd.DataFrame(columns=COLUMNS), None
-        st.error(f"데이터 불러오기 실패: {e.code}")
+    status, data = _request("GET", f"{API_PATH}?ref={BRANCH}")
+    if status == 404:
         return pd.DataFrame(columns=COLUMNS), None
+    if status != 200:
+        st.error(f"데이터 불러오기 실패: {status}")
+        return pd.DataFrame(columns=COLUMNS), None
+    content = json.loads(data)
+    sha = content["sha"]
+    decoded = base64.b64decode(content["content"]).decode("utf-8")
+    df = pd.read_csv(pd.io.common.StringIO(decoded), dtype=str).fillna("")
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    return df[COLUMNS], sha
 
 def save_data(df, sha=None, message="update"):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
@@ -59,13 +62,11 @@ def save_data(df, sha=None, message="update"):
     if sha:
         payload["sha"] = sha
     body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-    try:
-        req = Request(API_URL, data=body, headers=_get_headers(), method="PUT")
-        with urlopen(req) as res:
-            return res.status in (200, 201)
-    except HTTPError as e:
-        st.error(f"저장 실패: {e.code} {e.reason}")
+    status, _ = _request("PUT", API_PATH, body=body)
+    if status not in (200, 201):
+        st.error(f"저장 실패: {status}")
         return False
+    return True
 
 # ───────────────────────────────────────────────
 # UI
