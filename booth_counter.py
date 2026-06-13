@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
-import requests
 import base64
 import json
 from datetime import datetime
 import time
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode
+from urllib.error import HTTPError
 
 # ───────────────────────────────────────────────
 # 설정
@@ -14,33 +16,41 @@ GITHUB_REPO   = str(st.secrets["GITHUB_REPO"]).strip()
 GITHUB_PATH   = str(st.secrets.get("GITHUB_PATH", "booth_data.csv")).strip()
 BRANCH        = str(st.secrets.get("GITHUB_BRANCH", "main")).strip()
 
-# 토큰을 ASCII 바이트로 인코딩해서 헤더 latin-1 에러 방지
-_token_b64 = base64.b64encode(f":{GITHUB_TOKEN}".encode("utf-8")).decode("ascii")
-HEADERS = {
-    "Authorization": f"Basic {_token_b64}",
-    "Accept": "application/vnd.github.v3+json",
-}
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
 COLUMNS = ["입장시간", "이름", "전화번호", "퇴장시간", "코인", "상태"]
+
+def _get_headers():
+    # urllib 사용 - requests의 latin-1 헤더 문제 완전 우회
+    token_bytes = GITHUB_TOKEN.encode("utf-8")
+    auth = base64.b64encode(f":{GITHUB_TOKEN}".encode("utf-8")).decode("ascii")
+    return {
+        "Authorization": f"Basic {auth}",
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+        "User-Agent": "booth-app",
+    }
 
 # ───────────────────────────────────────────────
 # GitHub CSV 읽기 / 쓰기
 # ───────────────────────────────────────────────
 def load_data():
-    res = requests.get(API_URL, headers=HEADERS, params={"ref": BRANCH})
-    if res.status_code == 404:
+    try:
+        url = f"{API_URL}?ref={BRANCH}"
+        req = Request(url, headers=_get_headers())
+        with urlopen(req) as res:
+            content = json.loads(res.read().decode("utf-8"))
+        sha = content["sha"]
+        decoded = base64.b64decode(content["content"]).decode("utf-8")
+        df = pd.read_csv(pd.io.common.StringIO(decoded), dtype=str).fillna("")
+        for col in COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        return df[COLUMNS], sha
+    except HTTPError as e:
+        if e.code == 404:
+            return pd.DataFrame(columns=COLUMNS), None
+        st.error(f"데이터 불러오기 실패: {e.code}")
         return pd.DataFrame(columns=COLUMNS), None
-    if res.status_code != 200:
-        st.error(f"데이터 불러오기 실패: {res.status_code}")
-        return pd.DataFrame(columns=COLUMNS), None
-    content = res.json()
-    sha = content["sha"]
-    decoded = base64.b64decode(content["content"]).decode("utf-8")
-    df = pd.read_csv(pd.io.common.StringIO(decoded), dtype=str).fillna("")
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-    return df[COLUMNS], sha
 
 def save_data(df, sha=None, message="update"):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
@@ -49,12 +59,13 @@ def save_data(df, sha=None, message="update"):
     if sha:
         payload["sha"] = sha
     body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-    res = requests.put(
-        API_URL,
-        headers={**HEADERS, "Content-Type": "application/json"},
-        data=body,
-    )
-    return res.status_code in (200, 201)
+    try:
+        req = Request(API_URL, data=body, headers=_get_headers(), method="PUT")
+        with urlopen(req) as res:
+            return res.status in (200, 201)
+    except HTTPError as e:
+        st.error(f"저장 실패: {e.code} {e.reason}")
+        return False
 
 # ───────────────────────────────────────────────
 # UI
@@ -97,7 +108,7 @@ with tab_in:
                     "퇴장시간": "", "코인": "", "상태": "입장중",
                 }])
                 df = pd.concat([df, new_row], ignore_index=True)
-                if save_data(df, sha, f"check-in"):
+                if save_data(df, sha, "check-in"):
                     st.success(f"🎉 {name} 님, 환영합니다!")
                     st.balloons()
                 else:
