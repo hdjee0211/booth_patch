@@ -144,9 +144,42 @@ with tab_out:
 with tab_list:
     st.subheader("전체 방문자 현황")
 
-    col1, col2 = st.columns(2)
-    if st.button("🔄 새로고침", use_container_width=False):
-        st.rerun()
+    col_refresh, col_reset = st.columns([1, 1])
+    with col_refresh:
+        if st.button("🔄 새로고침", use_container_width=True):
+            st.rerun()
+    with col_reset:
+        if st.button("🗑️ 데이터 리셋", use_container_width=True, type="secondary"):
+            st.session_state["show_reset"] = True
+
+    # 리셋 비밀번호 확인
+    if st.session_state.get("show_reset"):
+        st.divider()
+        st.warning("⚠️ 리셋하면 모든 데이터가 삭제됩니다.")
+        with st.form("form_reset", clear_on_submit=True):
+            pw = st.text_input("비밀번호 입력", type="password")
+            col_ok, col_cancel = st.columns(2)
+            with col_ok:
+                confirm = st.form_submit_button("확인", use_container_width=True, type="primary")
+            with col_cancel:
+                cancel = st.form_submit_button("취소", use_container_width=True)
+        if confirm:
+            RESET_PW = str(st.secrets.get("RESET_PASSWORD", "1234")).strip()
+            if pw == RESET_PW:
+                empty_df = pd.DataFrame(columns=COLUMNS)
+                _, sha = load_data()
+                if save_data(empty_df, sha, "데이터 리셋"):
+                    st.session_state["show_reset"] = False
+                    st.success("✅ 데이터가 초기화되었습니다.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("리셋 실패. 다시 시도해 주세요.")
+            else:
+                st.error("❌ 비밀번호가 틀렸습니다.")
+        if cancel:
+            st.session_state["show_reset"] = False
+            st.rerun()
 
     df, _ = load_data()
 
