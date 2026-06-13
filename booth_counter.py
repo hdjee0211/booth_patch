@@ -9,14 +9,15 @@ import time
 # ───────────────────────────────────────────────
 # 설정 (Streamlit Secrets에서 불러오기)
 # ───────────────────────────────────────────────
-GITHUB_TOKEN  = st.secrets["GITHUB_TOKEN"]
-GITHUB_REPO   = st.secrets["GITHUB_REPO"]   # e.g. "hdjee0211/My-streamlit-app"
-GITHUB_PATH   = st.secrets.get("GITHUB_PATH", "booth_data.csv")
-BRANCH        = st.secrets.get("GITHUB_BRANCH", "main")
+GITHUB_TOKEN  = str(st.secrets["GITHUB_TOKEN"]).strip().encode("ascii", "ignore").decode("ascii")
+GITHUB_REPO   = str(st.secrets["GITHUB_REPO"]).strip()
+GITHUB_PATH   = str(st.secrets.get("GITHUB_PATH", "booth_data.csv")).strip()
+BRANCH        = str(st.secrets.get("GITHUB_BRANCH", "main")).strip()
 
 HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json",
+    "Content-Type": "application/json; charset=utf-8",
 }
 API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_PATH}"
 
